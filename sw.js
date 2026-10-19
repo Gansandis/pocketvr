@@ -1,5 +1,5 @@
 // PocketVR service worker: cache-first. First launch online caches the app + libraries + hand model; later launches work offline.
-const CACHE = 'pocketvr-v4-0';
+const CACHE = 'pocketvr-v3-7';
 const LOCAL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 const HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'storage.googleapis.com'];
 self.addEventListener('install', e => {
@@ -11,7 +11,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const r = e.request, u = new URL(r.url);
   if (r.method !== 'GET' || !(u.origin === location.origin || HOSTS.includes(u.hostname))) return;
-  if (u.pathname.includes('/wasm/') || u.pathname.endsWith('.task') || u.pathname.endsWith('.wasm')) return;
+  if (u.pathname.includes('/wasm/') || u.pathname.endsWith('.task') || u.pathname.endsWith('.wasm')) return;   // MediaPipe wasm + model: always go straight to the network/browser cache
   e.respondWith(caches.match(r, {ignoreSearch: u.origin === location.origin}).then(hit => {
     if (hit) return hit;
     return fetch(r).then(res => {
