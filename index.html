@@ -14,10 +14,9 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:syste
 canvas{display:block;position:fixed;left:0;top:0;width:100%;height:100%;touch-action:none}
 video{position:fixed;left:-10px;top:0;width:2px;height:2px;pointer-events:none}
 #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#0b1220;z-index:5;text-align:center;padding:20px}
-#start button{font-size:20px;padding:14px 36px;border-radius:30px;border:0;background:#4f8cff;color:#fff;cursor:pointer}
+#start button{font-size:20px;padding:14px 36px;border-radius:30px;border:0;background:#4f8cff;color:#fff}
 #start p{margin:0;opacity:.85;line-height:1.5}
 #hud{position:fixed;left:8px;top:6px;font:11px monospace;opacity:.7;z-index:3;white-space:pre;pointer-events:none}
-#vr-divider{position:fixed;left:50%;top:0;bottom:0;width:3px;background:rgba(255,255,255,0.25);transform:translateX(-50%);z-index:2;pointer-events:none;display:none}
 #web{position:fixed;left:6%;right:6%;top:5%;bottom:5%;z-index:4;display:flex;flex-direction:column;background:#1e1e21;border-radius:18px;overflow:hidden;touch-action:auto;box-shadow:0 0 0 2px #3a3a3f}
 #web[hidden]{display:none}
 #web.fl1,#web.fl2{top:14%;bottom:14%;width:42%;box-shadow:0 0 0 2px #4f8cff,0 8px 30px rgba(0,0,0,.6)}
@@ -34,10 +33,9 @@ video{position:fixed;left:-10px;top:0;width:2px;height:2px;pointer-events:none}
 <div id="start">
   <h2 style="margin:0">PocketVR</h2>
   <p>หมุนจอเป็นแนวนอน แล้วกดเริ่ม<br>อนุญาตกล้อง + เซนเซอร์เมื่อถูกถาม</p>
-  <button id="go">เริ่มใช้งาน VR</button>
+  <button id="go">เริ่ม</button>
   <p id="msg" style="font-size:13px"></p>
 </div>
-<div id="vr-divider"></div>
 <div id="hud"></div>
 <div id="web" hidden>
   <div id="wbar">
@@ -57,15 +55,13 @@ video{position:fixed;left:-10px;top:0;width:2px;height:2px;pointer-events:none}
 <script type="module">
 import {HandLandmarker, FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-const VERSION = 'v3.7c-fix';
+const VERSION = 'v3.10';
 const $ = id => document.getElementById(id);
-const hud = $('hud'), video = $('cam'), vrDivider = $('vr-divider');
+const hud = $('hud'), video = $('cam');
 const BG = 0x0b1220;
-
-// ปรับค่า IPD เริ่มต้นให้แคบลงเหมาะกับเลนส์ VR Box บนมือถือ
-const IPDS = [0.052, 0.058, 0.062, 0.066];
+const IPDS = [0.058, 0.063, 0.068];
 const QUAL = [0.75, 1, 1.5], QNAMES = ['ประหยัด', 'ปกติ', 'คมชัด'];
-const S = {mr:false, stereo:true, ipd:0.058, mode:'home', tab:'all', score:0, cam:false, qi:1, pscale:1.15, page:0};
+const S = {mr:false, stereo:false, ipd:0.063, mode:'home', tab:'all', score:0, cam:false, qi:1, pscale:1.15, page:0, sep:0.08};
 
 /* --- dark-room support --- */
 const NMODES = ['ปิด', 'อัตโนมัติ', 'สว่างสุด'], TMODES = ['ปิด', 'เปิด', 'อัตโนมัติ'];
@@ -79,7 +75,7 @@ const boostCv = document.createElement('canvas'); boostCv.width = 960; boostCv.h
 const bctx = boostCv.getContext('2d');
 let boostTex = null;
 
-/* --- phone apps & web shortcuts --- */
+/* --- phone apps (launched through Android deep links) and web shortcuts --- */
 const APPS = [
   {n:'YouTube',     i:'▶️', pkg:'com.google.android.youtube',      link:'https://www.youtube.com/'},
   {n:'Spotify',     i:'🎵', pkg:'com.spotify.music',               link:'spotify://'},
@@ -103,21 +99,21 @@ function saveList(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch
 let customApps = loadList('pvr_apps'), customWebs = loadList('pvr_webs');
 
 /* --- tunables --- */
-const PINCH_SETS = [[0.18, 0.30, 'แน่น'], [0.22, 0.34, 'กลาง'], [0.28, 0.42, 'หลวม']];
-const SMOOTH = [[2.5, 4, 'ไว'], [1.2, 3, 'กลาง'], [0.6, 2.5, 'นุ่ม']];
-const RATE_MS = [33, 50, 80], RATE_N = ['เร็ว', 'กลาง', 'ประหยัด'];
+const PINCH_SETS = [[0.18, 0.30, 'แน่น'], [0.22, 0.34, 'กลาง'], [0.28, 0.42, 'หลวม']];   // [start, release, label]: thumb-index distance / palm size
+const SMOOTH = [[2.5, 4, 'ไว'], [1.2, 3, 'กลาง'], [0.6, 2.5, 'นุ่ม']];                    // One-Euro filter [minCutoff, beta, label]
+const RATE_MS = [33, 50, 80], RATE_N = ['เร็ว', 'กลาง', 'ประหยัด'];                          // minimum gap between hand detections
 const GAZE_N = ['ปิด', 'เปิด', 'เฉพาะแบ่งจอ'], PTR_N = ['ปลายนิ้วชี้', 'กึ่งกลางนิ้วจีบ'], DEV_N = ['GPU', 'CPU'];
-const LOST_MS = 650;
-const HOLD_R = 0.45;
-const HIT_SLOP = 8;
-const HAND_D = 1.1;
-const PANEL_R = 2.0, DOCK_R = 1.8;
-const BASE_W = 2.0, BASE_H = 1.1;
+const LOST_MS = 650;      // keep the last hand pose this long after a missed detection
+const HOLD_R = 0.45;      // while closing the fingers below this, the cursor stops moving (so it doesn't drift)
+const HIT_SLOP = 8;       // extra px around every button (logical UI px)
+const HAND_D = 1.1;       // distance (m) where the hand skeleton is drawn
+const PANEL_R = 2.2, DOCK_R = 2.0;
+const BASE_W = 2.0, BASE_H = 1.1;   // panel size (m) at scale 1
 const PS_MIN = 0.6, PS_MAX = 2.0;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 /* --- saved preferences --- */
-const P = {gaze:1, ptr:0, smooth:1, rate:1, pinch:1, dev:0, two:0};
+const P = {gaze:0, ptr:0, smooth:1, rate:1, pinch:1, dev:0, two:0};
 function loadPrefs(){
   try{
     const o = JSON.parse(localStorage.getItem('pvr_prefs') || '{}');
@@ -127,27 +123,23 @@ function loadPrefs(){
     if (Number.isInteger(o.qi) && o.qi >= 0) S.qi = Math.min(o.qi, 2);
     if (Number.isInteger(o.nm) && o.nm >= 0) N.mode = Math.min(o.nm, 2);
     if (IPDS.includes(o.ipd)) S.ipd = o.ipd;
+    if (typeof o.sp === 'number') S.sep = clamp(o.sp, 0, 0.24);
   }catch(e){}
 }
 function savePrefs(){
-  try{ localStorage.setItem('pvr_prefs', JSON.stringify(Object.assign({}, P, {qi:S.qi, nm:N.mode, ipd:S.ipd}))); }catch(e){}
+  try{ localStorage.setItem('pvr_prefs', JSON.stringify(Object.assign({}, P, {qi:S.qi, nm:N.mode, ipd:S.ipd, sp:S.sep}))); }catch(e){}
 }
 loadPrefs();
 
 /* ---------- renderer / scene ---------- */
-const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
+const renderer = new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
 document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(BG);
 scene.fog = new THREE.Fog(BG, 6, 22);
-
 const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 50);
 scene.add(camera);
-
-// จุดสำคัญ: ตั้งค่า StereoCamera ให้จุดตัดสายตาตรงกับระยะ UI
 const stereo = new THREE.StereoCamera();
-stereo.aspect = 0.5;
-stereo.eyeSep = S.ipd;
 
 scene.add(new THREE.HemisphereLight(0xffffff, 0x334466, 0.9));
 const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(1, 2, 1); scene.add(sun);
@@ -169,6 +161,7 @@ function roundRect(x, a, b, w, h, r){
   x.beginPath(); x.moveTo(a+r,b); x.arcTo(a+w,b,a+w,b+h,r); x.arcTo(a+w,b+h,a,b+h,r);
   x.arcTo(a,b+h,a,b,r); x.arcTo(a,b,a+w,b,r); x.closePath();
 }
+// W,H = logical size used by the drawing code; k = texture sharpness multiplier
 function makeUI(W, H, k, draw){
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(W*k); canvas.height = Math.round(H*k);
@@ -201,13 +194,13 @@ function invalidateUI(){ panel.dirty = true; dock.dirty = true; }
 /* ---------- actions ---------- */
 function toggleMR(){ if (!S.cam) return; setMR(!S.mr); invalidateUI(); }
 function toggleSplit(){ S.stereo = !S.stereo; resize(); invalidateUI(); }
-function cycleIPD(){ 
-  S.ipd = IPDS[(IPDS.indexOf(S.ipd)+1) % IPDS.length]; 
-  stereo.eyeSep = S.ipd;
-  savePrefs(); 
-  invalidateUI(); 
-  showToast('ระยะตา (IPD): ' + Math.round(S.ipd*1000) + ' mm', 1500);
+const SEPS = [0, 0.04, 0.08, 0.12, 0.16, 0.20];
+function cycleSep(){
+  let bi = 0; SEPS.forEach((v, i) => { if (Math.abs(v - S.sep) < Math.abs(SEPS[bi] - S.sep)) bi = i; });
+  S.sep = SEPS[(bi + 1) % SEPS.length]; savePrefs(); invalidateUI();
+  showToast('ระยะภาพซ้าย-ขวา ' + Math.round(S.sep*100) + '% (ถ้ายังเห็นซ้อน ลองเพิ่ม/ลด)', 3500);
 }
+function cycleIPD(){ S.ipd = IPDS[(IPDS.indexOf(S.ipd)+1) % IPDS.length]; savePrefs(); invalidateUI(); }
 function cycleQuality(){ S.qi = (S.qi + 1) % QUAL.length; applyQuality(); savePrefs(); invalidateUI(); }
 function zoomPanel(f){ S.pscale = clamp(S.pscale*f, PS_MIN, PS_MAX); }
 function showToast(msg, ms){
@@ -222,8 +215,9 @@ function buildIntent(a){
   const fb = 'https://play.google.com/store/apps/details?id=' + a.pkg;
   return 'intent://' + m[2] + '#Intent;scheme=' + m[1].toLowerCase() + ';package=' + a.pkg + ';S.browser_fallback_url=' + encodeURIComponent(fb) + ';end';
 }
+// Chrome only follows intent: links right after a real touch, so a hand gesture alone may be refused
 function go(url){
-  if (navigator.userActivation && !navigator.userActivation.isActive){
+  if (!NATIVE.ok && navigator.userActivation && !navigator.userActivation.isActive){
     N.pending = url; showToast('แตะจอ 1 ครั้งเพื่อเปิดแอป', 6000); return;
   }
   window.location.href = url;
@@ -286,16 +280,16 @@ function cycleSmooth(){ cycleP('smooth', 3); }
 function cycleRate(){ cycleP('rate', 3); }
 function cyclePinch(){ cycleP('pinch', 3); }
 function cycleDev(){ cycleP('dev', 2); showToast('เปลี่ยนตัวประมวลผลแทร็กมือ…', 2500); reinitHands(); }
-function cycleTwo(){ cycleP('two', 2); showToast(P.two ? 'โหมดสองมือเปิด: จีบสองมือแล้วถ่างเพื่อซูม' : 'ปิดโหมดสองมือ', 3000); reinitHands(); }
+function cycleTwo(){ cycleP('two', 2); showToast(P.two ? 'โหมดสองมือเปิด: ใช้ได้ทั้งสองมือ • จีบสองมือแล้วถ่าง/หุบเพื่อซูม' : 'ปิดโหมดสองมือ', 3500); reinitHands(); }
 async function reinitHands(){
   try{ if (landmarker){ landmarker.close(); landmarker = null; } }catch(e){ landmarker = null; }
-  H.ok = false; H.lm = null; H.pinch = false; H.fist = false;
+  HANDS.forEach(h => { h.ok = false; h.lm = null; h.pinch = false; h.fist = false; h.pp = null; }); ZM = null; ZC = null;
   await initHands();
   invalidateUI();
 }
 function resetSettings(){
-  Object.assign(P, {gaze:1, ptr:0, smooth:1, rate:1, pinch:1, dev:0, two:0});
-  S.qi = 1; N.mode = 1; S.ipd = 0.058; stereo.eyeSep = 0.058; N.lastProbe = 0;
+  Object.assign(P, {gaze:0, ptr:0, smooth:1, rate:1, pinch:1, dev:0, two:0});
+  S.qi = 1; N.mode = 1; S.ipd = 0.063; S.sep = 0.08; N.lastProbe = 0;
   applyQuality(); savePrefs(); invalidateUI(); showToast('รีเซ็ตการตั้งค่าแล้ว', 2500);
   reinitHands();
 }
@@ -317,7 +311,37 @@ function resetPanel(){
   dockPivot.rotation.y = 0; dock.mesh.position.y = -0.72;
 }
 
-/* ---------- app panel ---------- */
+/* ---------- native Android bridge (exists only inside the APK) ---------- */
+const NATIVE = {ok:(typeof AndroidBridge !== 'undefined' && !!AndroidBridge.postMessage), n:0, wait:{}, apps:[], icons:{}, loaded:false};
+function nativeCall(op, extra){
+  return new Promise(res => {
+    const id = ++NATIVE.n; NATIVE.wait[id] = res;
+    try{ AndroidBridge.postMessage(JSON.stringify(Object.assign({id, op}, extra || {}))); }catch(e){ delete NATIVE.wait[id]; res({ok:false}); return; }
+    setTimeout(() => { if (NATIVE.wait[id]){ delete NATIVE.wait[id]; res({ok:false}); } }, 10000);
+  });
+}
+async function loadIcons(){
+  for (const a of NATIVE.apps){
+    if (NATIVE.icons[a.p]) continue;
+    const m = await nativeCall('icon', {pkg:a.p});
+    if (m.ok && m.data){ const img = new Image(); img.onload = () => { NATIVE.icons[a.p] = img; panel.dirty = true; }; img.src = 'data:image/png;base64,' + m.data; }
+  }
+}
+function nativeInit(){
+  if (!NATIVE.ok) return;
+  AndroidBridge.onmessage = e => {
+    let m; try{ m = JSON.parse(e.data); }catch(err){ return; }
+    const w = NATIVE.wait[m.id]; if (w){ delete NATIVE.wait[m.id]; w(m); }
+  };
+  nativeCall('apps').then(m => { if (m.ok){ NATIVE.apps = m.data || []; NATIVE.loaded = true; invalidateUI(); loadIcons(); } });
+}
+window.pvrBack = () => {                 // Android back button: close the browser / leave an app first
+  if (N.webOpen){ closeWeb(); return true; }
+  if (S.mode !== 'home'){ setMode('home'); return true; }
+  return false;
+};
+
+/* ---------- app panel (Quest Home style) ---------- */
 const PW = 1024, PH = 563;
 const NAV = [['all','▦','ทั้งหมด','แอปและเครื่องมือ'], ['apps','🎮','แอปและเกม','แอปและเกม'], ['phone','📱','แอปในเครื่อง','แอปในเครื่อง'], ['web','🌐','เว็บ','เว็บไซต์'], ['settings','⚙','ตั้งค่า','ตั้งค่า']];
 const GRAY = ['#56565e','#38383e'];
@@ -342,6 +366,7 @@ const SETS = [
   {id:'mr',      t:'ภาพจริง (MR)',        v:() => S.mr ? 'เปิด' : 'ปิด',          on:() => S.mr,       fn:toggleMR},
   {id:'split',   t:'แบ่งจอ VR',           v:() => S.stereo ? 'เปิด' : 'ปิด',      on:() => S.stereo,   fn:toggleSplit},
   {id:'ipd',     t:'ระยะตา',              v:() => Math.round(S.ipd*1000) + ' mm', on:() => false,      fn:cycleIPD},
+  {id:'sep',     t:'ระยะภาพซ้าย-ขวา',     v:() => Math.round(S.sep*100) + '%',    on:() => false,      fn:cycleSep},
   {id:'quality', t:'คุณภาพภาพ',           v:() => QNAMES[S.qi],                   on:() => false,      fn:cycleQuality},
   {id:'gaze',    t:'เคอร์เซอร์กลางจอ',    v:() => GAZE_N[P.gaze],                 on:() => P.gaze > 0, fn:cycleGaze},
   {id:'night',   t:'โหมดมืด',             v:() => NMODES[N.mode],                 on:() => N.mode > 0, fn:cycleNight},
@@ -357,23 +382,29 @@ const SETS = [
 function drawSettings(x, ui, hv, pr){
   x.textBaseline = 'alphabetic';
   SETS.forEach((s, i) => {
-    const col = i < 7 ? 0 : 1, row = i % 7;
-    const rx = 262 + col*374, ry = 112 + row*62, rw = 360, rh = 56;
+    const col = i < 8 ? 0 : 1, row = i % 8;
+    const rx = 262 + col*374, ry = 104 + row*56, rw = 360, rh = 50;
     ui.reg('set:' + s.id, rx, ry, rw, rh, s.fn);
     const isH = hv === 'set:' + s.id, isP = pr === 'set:' + s.id;
     x.fillStyle = isP ? '#5c5c64' : (isH ? '#4a4a50' : '#3a3a3f');
     roundRect(x, rx, ry, rw, rh, 18); x.fill();
     x.fillStyle = '#fff'; x.font = '20px sans-serif'; x.textAlign = 'left';
-    x.fillText(s.t, rx + 16, ry + 35, 172);
+    x.fillText(s.t, rx + 16, ry + 32, 172);
     const on = s.on(), pw = 152, px = rx + rw - pw - 10;
-    x.fillStyle = on ? '#2e9e6b' : '#55555e'; roundRect(x, px, ry + 9, pw, 38, 19); x.fill();
+    x.fillStyle = on ? '#2e9e6b' : '#55555e'; roundRect(x, px, ry + 7, pw, 36, 18); x.fill();
     x.fillStyle = '#fff'; x.font = '18px sans-serif'; x.textAlign = 'center';
-    x.fillText(s.v(), px + pw/2, ry + 34, pw - 14);
+    x.fillText(s.v(), px + pw/2, ry + 31, pw - 14);
     if (isH){ x.strokeStyle = '#fff'; x.lineWidth = 3; roundRect(x, rx+1.5, ry+1.5, rw-3, rh-3, 17); x.stroke(); }
   });
 }
 const G_PHONE = ['#4a6cf7','#2a3f9e'], G_WEB = ['#2bb3a3','#146d63'];
 function getCards(tab){
+  if (tab === 'phone' && NATIVE.ok){
+    const l = NATIVE.apps.map(a => ({id:'n:' + a.p, icon:'📱', img:NATIVE.icons[a.p], t:a.n, sub:() => 'เปิดแอป', g:G_PHONE,
+      fn:() => { showToast('กำลังเปิด ' + a.n + '…', 2000); nativeCall('launch', {pkg:a.p}); }}));
+    if (!NATIVE.loaded) l.push({id:'nload', icon:'⏳', t:'กำลังโหลดรายชื่อแอป…', sub:() => '', g:GRAY, fn:() => {}});
+    return l;
+  }
   if (tab === 'phone'){
     const l = APPS.concat(customApps).map((a, i) => ({id:'app' + i, icon:a.i || '📱', t:a.n, sub:() => a.custom ? 'แอปของฉัน' : 'เปิดแอป', g:G_PHONE, fn:() => launchApp(a)}));
     l.push({id:'addapp', icon:'＋', t:'เพิ่มแอป', sub:() => 'ชื่อ + ลิงก์', g:GRAY, fn:addApp});
@@ -394,12 +425,15 @@ function drawPanel(x, ui){
   x.clearRect(0, 0, PW, PH);
   x.textBaseline = 'alphabetic';
 
+  // grab handle (pinch it, or make a fist anywhere on the panel, to drag)
   ui.reg('grab', 360, 0, 304, 44, null);
   x.fillStyle = (hv === 'grab') ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.5)';
   roundRect(x, 442, 5, 140, 12, 6); x.fill();
 
+  // body
   x.fillStyle = 'rgba(30,30,33,.95)'; roundRect(x, 0, 24, PW, PH-24, 40); x.fill();
 
+  // sidebar
   x.textAlign = 'left'; x.fillStyle = '#fff'; x.font = 'bold 34px sans-serif';
   x.fillText('แอป', 48, 102);
   const nav = (id, icon, label, y, active, fn, h) => {
@@ -415,6 +449,7 @@ function drawPanel(x, ui){
   x.fillStyle = 'rgba(255,255,255,.12)'; x.fillRect(32, 440, 196, 2);
   nav('side:ctr', '⌖', 'จัดกลางใหม่', 462, false, resetPanel, 44);
 
+  // header
   const title = NAV.find(n => n[0] === S.tab)[3];
   x.fillStyle = '#d4d4da'; x.font = '26px sans-serif'; x.fillText(title, 262, 86);
   const label = !S.cam ? 'ไม่มีกล้อง' : (S.mr ? 'ออกจาก MR' : 'เข้าสู่ MR');
@@ -423,6 +458,7 @@ function drawPanel(x, ui){
   roundRect(x, 770, 48, 226, 54, 27); x.fill();
   x.fillStyle = '#fff'; x.font = '23px sans-serif'; x.textAlign = 'center'; x.fillText(label, 883, 84);
 
+  // cards
   const isSet = S.tab === 'settings';
   const allCards = isSet ? [] : getCards(S.tab), pages = Math.max(1, Math.ceil(allCards.length / 6));
   S.page = clamp(S.page, 0, pages - 1);
@@ -437,7 +473,8 @@ function drawPanel(x, ui){
     const on = c.on && c.on();
     g.addColorStop(0, on ? '#3ecf8e' : c.g[0]); g.addColorStop(1, on ? '#1f8f5f' : c.g[1]);
     x.fillStyle = g; roundRect(x, cx+8, cy+8, cw-16, 116, 18); x.fill();
-    x.fillStyle = '#fff'; x.font = '58px sans-serif'; x.textAlign = 'center'; x.fillText(c.icon, cx + cw/2, cy + 86);
+    x.fillStyle = '#fff'; x.font = '58px sans-serif'; x.textAlign = 'center';
+    if (c.img) x.drawImage(c.img, cx + cw/2 - 44, cy + 20, 88, 88); else x.fillText(c.icon, cx + cw/2, cy + 86);
     x.textAlign = 'left'; x.font = 'bold 24px sans-serif'; x.fillText(c.t, cx+16, cy+156, cw-28);
     x.font = '18px sans-serif'; x.fillStyle = on ? '#6ee7b0' : '#b8b8c0'; x.fillText(c.sub(), cx+16, cy+181, cw-28);
     if (isH){ x.strokeStyle = '#fff'; x.lineWidth = 3; roundRect(x, cx+1.5, cy+1.5, cw-3, ch-3, 23); x.stroke(); }
@@ -445,6 +482,7 @@ function drawPanel(x, ui){
 
   if (isSet) drawSettings(x, ui, hv, pr);
 
+  // page buttons (only when a tab has more than six cards)
   if (pages > 1){
     const pbtn = (id, ch, px, on, fn) => {
       ui.reg(id, px, 50, 50, 46, on ? fn : null);
@@ -457,6 +495,7 @@ function drawPanel(x, ui){
     pbtn('pgnext', '›', 690, S.page < pages - 1, () => { S.page++; invalidateUI(); });
   }
 
+  // resize grip (bottom-right) — pinch and drag to scale the panel
   ui.reg('resize', PW-64, PH-64, 60, 60, null);
   x.strokeStyle = (hv === 'resize') ? '#fff' : 'rgba(255,255,255,.55)'; x.lineWidth = 5; x.lineCap = 'round';
   for (let i = 0; i < 3; i++){
@@ -469,7 +508,7 @@ function curvedGeo(wM, hM, R){
   const L = wM / R;
   const g = new THREE.CylinderGeometry(R, R, hM, 32, 1, true, Math.PI - L/2, L);
   const uv = g.attributes.uv;
-  for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i));
+  for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i));   // un-mirror when seen from inside
   return g;
 }
 let builtScale = S.pscale;
@@ -483,7 +522,7 @@ function syncPanelGeo(){
   panel.mesh.geometry.dispose(); panel.mesh.geometry = g; builtScale = S.pscale;
 }
 
-/* ---------- dock ---------- */
+/* ---------- dock (bottom bar, draggable) ---------- */
 const DW = 1150, DH = 112;
 const DOCK = [
   {id:'home',    icon:'🏠', c:'#4f8cff', fn:() => { S.tab = 'all'; S.page = 0; setMode('home'); }, on:() => S.mode === 'home'},
@@ -498,15 +537,15 @@ function drawDock(x, ui){
   const hv = ui.hover, pr = ui.press;
   x.clearRect(0, 0, DW, DH);
   x.textBaseline = 'alphabetic';
-  ui.reg('dockbg', 0, 0, DW, DH, null);
+  ui.reg('dockbg', 0, 0, DW, DH, null);     // registered first = lowest priority; grabbing it drags the dock
   x.fillStyle = (hv === 'dockbg') ? 'rgba(48,48,53,.97)' : 'rgba(30,30,33,.95)'; roundRect(x, 0, 0, DW, DH, 56); x.fill();
-  
+  // clock
   x.fillStyle = 'rgba(255,255,255,.14)'; x.beginPath(); x.arc(62, 56, 30, 0, Math.PI*2); x.fill();
   x.textAlign = 'center'; x.font = '30px sans-serif'; x.fillStyle = '#fff'; x.fillText('👤', 62, 67);
   const t = new Date().toLocaleTimeString('th-TH', {hour:'2-digit', minute:'2-digit', hour12:false});
   x.textAlign = 'left'; x.font = 'bold 28px sans-serif'; x.fillText(t, 108, 54);
   x.font = '16px sans-serif'; x.fillStyle = N.warn ? '#ffb340' : '#a0a0aa'; x.fillText(N.warn ? 'มืดมาก 🔦' : 'PocketVR', 108, 80, 120);
-
+  // icons
   const icon = (id, ch, color, px, fn, on) => {
     const s = 64, y = 22, isH = hv === 'dock:' + id, isP = pr === 'dock:' + id;
     ui.reg('dock:' + id, px, y, s, s, fn);
@@ -541,7 +580,7 @@ toast.mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.169), toast.mat);
 toast.mesh.visible = false; toast.mesh.rotation.x = -0.45;
 dockPivot.add(toast.mesh);
 
-/* ---------- floating windows ---------- */
+/* ---------- floating windows (camera / clock / calculator / 360 controls) ---------- */
 const WIN_R = 1.9, WIN_SLOTS = [0.85, -0.85, 1.25, -1.25, 1.65, -1.65], wins = [];
 let CALC = {disp:'0', acc:null, op:null, fresh:true};
 const STOPW = {run:false, t0:0, acc:0};
@@ -662,11 +701,12 @@ function closeWin(win){
   if (win.vmesh){ win.vmesh.geometry.dispose(); win.vmat.dispose(); }
   const i = wins.indexOf(win); if (i >= 0) wins.splice(i, 1);
   if (grab && grab.target === win) grab = null;
+  CTX.forEach(c => { if (c.grab && c.grab.target === win) c.grab = null; });
   invalidateUI();
 }
 function toggleWin(type){ const w = wins.find(v => v.type === type); if (w) closeWin(w); else { createWin(type); showToast('จีบหัวข้อหน้าต่างเพื่อลาก • มุมขวาล่างเพื่อย่อ/ขยาย', 3500); } }
 
-/* ---------- 360 player ---------- */
+/* ---------- app: 360° video / photo player ---------- */
 const v360 = {kind:'demo', name:'ภาพเดโม', el:null, fin:null, tex:null, demoTex:null, mat:null, mesh:null, yaw:0, pitch:0, fov:70, base:-Math.PI/2, url:null};
 const v360g = new THREE.Group(); v360g.rotation.order = 'YXZ'; v360g.visible = false; heading.add(v360g);
 function makeDemoTex(){
@@ -763,7 +803,7 @@ function drawVctlWin(x, ui, win){
   if (dur){ x.fillStyle = '#4f8cff'; roundRect(x, 24, 160, Math.max(8, (W - 48)*cur/dur), 8, 4); x.fill(); }
 }
 
-/* ---------- shooting game ---------- */
+/* ---------- app: shooting game ---------- */
 const targets = [];
 const tgeo = new THREE.SphereGeometry(0.28, 12, 10);
 let spawnAcc = 0;
@@ -771,7 +811,7 @@ const scoreCanvas = document.createElement('canvas'); scoreCanvas.width = 256; s
 const scoreTex = new THREE.CanvasTexture(scoreCanvas);
 const scorePlane = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.2),
   new THREE.MeshBasicMaterial({map:scoreTex, transparent:true, fog:false}));
-scorePlane.position.set(0, 0.95, -2.0); groups.shoot.add(scorePlane);
+scorePlane.position.set(0, 0.95, -2.2); groups.shoot.add(scorePlane);
 function drawScore(){
   const x = scoreCanvas.getContext('2d');
   x.clearRect(0, 0, 256, 64); x.fillStyle = 'rgba(0,0,0,.5)'; roundRect(x, 2, 2, 252, 60, 16); x.fill();
@@ -784,7 +824,7 @@ function popTarget(m){
 }
 function spawnTarget(){
   if (targets.length >= 6) return;
-  const a = THREE.MathUtils.degToRad((Math.random()-0.5)*80), y = (Math.random()-0.4)*1.5, R = 2.0 + Math.random()*1.0;
+  const a = THREE.MathUtils.degToRad((Math.random()-0.5)*80), y = (Math.random()-0.4)*1.5, R = 2.5 + Math.random()*1.5;
   const m = new THREE.Mesh(tgeo, new THREE.MeshBasicMaterial({color:new THREE.Color().setHSL(Math.random(), 0.8, 0.6), fog:false}));
   m.position.set(R*Math.sin(a), y, -R*Math.cos(a));
   m.userData.born = performance.now();
@@ -792,7 +832,7 @@ function spawnTarget(){
   groups.shoot.add(m); targets.push(m);
 }
 
-/* ---------- gallery ---------- */
+/* ---------- app: gallery ---------- */
 const galleryItems = [];
 [[new THREE.TorusKnotGeometry(0.25, 0.08, 64, 8), -36, 0.1],
  [new THREE.IcosahedronGeometry(0.3, 0), -12, -0.1],
@@ -800,7 +840,7 @@ const galleryItems = [];
  [new THREE.BoxGeometry(0.4, 0.4, 0.4), 36, -0.1]].forEach(([geo, deg, y]) => {
   const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:new THREE.Color().setHSL(Math.random(), 0.7, 0.55)}));
   const a = THREE.MathUtils.degToRad(deg);
-  m.position.set(2.0*Math.sin(a), y, -2.0*Math.cos(a));
+  m.position.set(2.4*Math.sin(a), y, -2.4*Math.cos(a));
   m.userData.spd = 0.8;
   m.userData.onClick = () => { m.userData.spd = m.userData.spd > 1 ? 0.8 : 3; m.material.color.setHSL(Math.random(), 0.7, 0.55); };
   groups.gallery.add(m); galleryItems.push(m);
@@ -824,7 +864,7 @@ function setMR(on){
   scene.fog = on ? null : new THREE.Fog(BG, 6, 22);
 }
 
-/* ---------- sensors ---------- */
+/* ---------- sensors: gyro look ---------- */
 const devQ = new THREE.Quaternion();
 const _z = new THREE.Vector3(0,0,1), _e = new THREE.Euler(), _q0 = new THREE.Quaternion(), _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 let gotOrient = false;
@@ -841,14 +881,15 @@ function recenterHeading(){
   heading.rotation.y = Math.atan2(-d.x, -d.z);
 }
 
-/* ---------- camera + hands ---------- */
+/* ---------- camera + hand tracking ---------- */
 let videoTex = null, landmarker = null, lastVT = -1, frameN = 0, delegate = '-';
-const H = {ok:false, x:0, y:0, tx:0, ty:0, px:0, py:0, ptx:0, pty:0, pinch:false, fist:false, lastSeen:0, lm:null, a:null};
-const D = {ms:0};
+function newHand(){ return {ok:false, x:0, y:0, tx:0, ty:0, px:0, py:0, ptx:0, pty:0, pinch:false, fist:false, lastSeen:0, lm:null, a:null, pp:null, n:0, F:null}; }
+let H = null, F = null, HANDS = [], ZM = null, ZC = null;   // H / F always point at the hand currently being processed
+const D = {ms:0};              // average time of one hand detection (ms)
 let lastDet = 0, detGap = 0;
 const detCv = document.createElement('canvas'); detCv.width = 384; detCv.height = 216;
 const dctx = detCv.getContext('2d');
-
+// One-Euro filter: smooth when the hand is slow, responsive when it moves fast
 class OneEuro{
   constructor(){ this.x = null; this.dx = 0; this.t = 0; }
   reset(){ this.x = null; }
@@ -861,12 +902,17 @@ class OneEuro{
     return this.x;
   }
 }
-const F = {x:new OneEuro(), y:new OneEuro(), px:new OneEuro(), py:new OneEuro()};
+HANDS = [newHand(), newHand()];
+HANDS.forEach(h => { h.F = {x:new OneEuro(), y:new OneEuro(), px:new OneEuro(), py:new OneEuro()}; });
+H = HANDS[0]; F = H.F;
+// every frame: glide the cursor toward the latest filtered target so it moves smoothly between detections
 function easeCursor(dt){
-  if (!H.ok) return;
   const k = 1 - Math.exp(-dt / 0.035);
-  H.x += (H.tx - H.x)*k; H.y += (H.ty - H.y)*k;
-  H.px += (H.ptx - H.px)*k; H.py += (H.pty - H.py)*k;
+  HANDS.forEach(h => {
+    if (!h.ok) return;
+    h.x += (h.tx - h.x)*k; h.y += (h.ty - h.y)*k;
+    h.px += (h.ptx - h.px)*k; h.py += (h.pty - h.py)*k;
+  });
 }
 async function initCamera(){
   try{
@@ -906,6 +952,7 @@ async function initHands(){
     if (delegate === '-') delegate = 'fail';
   }catch(e){ delegate = 'fail'; initErr = 'wasm: ' + (e && e.message || e); }
 }
+// measure scene brightness, decide digital gain / exposure / torch
 function updateLight(now){
   if (!S.cam || video.readyState < 2) return;
   if (now - N.lastProbe > 900){
@@ -916,7 +963,7 @@ function updateLight(now){
     for (let i = 0; i < d.length; i += 4) sum += d[i]*0.299 + d[i+1]*0.587 + d[i+2]*0.114;
     N.lum = sum / (d.length/4);
     if (!N.dark && N.lum < 70) N.dark = true; else if (N.dark && N.lum > 105) N.dark = false;
-    if (N.tm === 2 && N.torchOK && !N.torchOn && N.lum < 28) setTorch(true);
+    if (N.tm === 2 && N.torchOK && !N.torchOn && N.lum < 28) setTorch(true);   // auto torch: switches on in very dark rooms
     const wantEV = N.mode === 2 ? 1 : 0;
     if (wantEV !== N.ev){ N.ev = wantEV; applyExposure(); }
     let tg = 1;
@@ -930,6 +977,7 @@ function updateLight(now){
   const b = N.gain > 1.15;
   if (b !== N.boosting){ N.boosting = b; invalidateUI(); applyBackground(); }
 }
+// brightened copy of the camera frame (used for hand detection and, in MR, as the background)
 function boostFrame(){
   const vw = video.videoWidth || 640, vh = video.videoHeight || 360;
   const w = Math.min(vw, 960), h = Math.round(w * vh / vw);
@@ -951,7 +999,7 @@ const dist2 = (a, b) => Math.hypot(a.x-b.x, a.y-b.y);
 const TIPS = [8,12,16,20], PIPS = [6,10,14,18];
 function updateHands(now){
   if (!landmarker || !S.cam || video.readyState < 2 || video.currentTime === lastVT) return;
-  detGap = Math.max(RATE_MS[P.rate], D.ms * 2.2);
+  detGap = Math.max(RATE_MS[P.rate], D.ms * 2.2);   // keep detection under ~45% of the frame budget
   if (now - lastDet < detGap) return;
   lastVT = video.currentTime; lastDet = now;
   let src = video;
@@ -963,31 +1011,62 @@ function updateHands(now){
   let r; try{ r = landmarker.detectForVideo(detCv, now); }catch(e){ return; }
   D.ms += ((performance.now() - t0) - D.ms) * 0.2;
   const lms = r.landmarks || [];
-  H.n = lms.length;
-  let lm = lms[0], other = null;
-  if (lms.length > 1){
-    let bi = 0;
-    if (H.pp){
-      const d0 = Math.hypot(lms[0][9].x - H.pp.x, lms[0][9].y - H.pp.y), d1 = Math.hypot(lms[1][9].x - H.pp.x, lms[1][9].y - H.pp.y);
-      if (d1 < d0) bi = 1;
-    }
-    lm = lms[bi]; other = lms[1 - bi];
+  const slots = assignHands(lms, now);
+  HANDS.forEach((h, i) => {
+    h.n = lms.length;
+    if (slots[i]) processHand(h, slots[i], now);
+    else if (now - h.lastSeen > LOST_MS){ h.ok = false; h.lm = null; h.pinch = false; h.fist = false; h.pp = null; }
+  });
+  H = HANDS[0]; F = H.F;
+  // both hands pinching and moving apart / together: zoom
+  const A = HANDS[0], B = HANDS[1];
+  if (P.two && A.ok && B.ok && A.pinch && B.pinch && A.lm && B.lm){
+    const dd = Math.max(0.05, Math.hypot(((A.lm[4].x + A.lm[8].x) - (B.lm[4].x + B.lm[8].x))/2*1.78, ((A.lm[4].y + A.lm[8].y) - (B.lm[4].y + B.lm[8].y))/2));
+    if (!ZC) ZC = {d0:dd};
+    else if (!ZM){ if (Math.abs(dd / ZC.d0 - 1) > 0.18) ZM = {d0:dd, k:1, b:null, t:null}; }
+    else ZM.k += (dd / ZM.d0 - ZM.k) * 0.4;
+  } else { ZC = null; ZM = null; }
+}
+// decide which tracked hand (slot 0 / 1) each detected hand belongs to
+function assignHands(lms, now){
+  const out = [null, null];
+  if (!lms.length) return out;
+  if (!P.two){ out[0] = lms[0]; return out; }
+  const alive = HANDS.map(h => !!(h.pp && h.ok && now - h.lastSeen < LOST_MS));
+  const dist = (l, h) => Math.hypot(l[9].x - h.pp.x, l[9].y - h.pp.y);
+  if (lms.length === 1){
+    const l = lms[0]; let sl = 0;
+    if (alive[0] && alive[1]) sl = dist(l, HANDS[1]) < dist(l, HANDS[0]) ? 1 : 0;
+    else if (alive[0]) sl = dist(l, HANDS[0]) < 0.35 ? 0 : 1;
+    else if (alive[1]) sl = dist(l, HANDS[1]) < 0.35 ? 1 : 0;
+    out[sl] = l; return out;
   }
-  if (!lm){ if (now - H.lastSeen > LOST_MS){ H.ok = false; H.lm = null; H.pinch = false; H.fist = false; H.zoom = null; H.p2 = false; H.pp = null; H.lm2 = null; } return; }
+  let a = lms[0], b = lms[1], t;
+  if (alive[0] && alive[1]){ if (dist(a, HANDS[0]) + dist(b, HANDS[1]) > dist(a, HANDS[1]) + dist(b, HANDS[0])){ t = a; a = b; b = t; } }
+  else if (alive[0]){ if (dist(b, HANDS[0]) < dist(a, HANDS[0])){ t = a; a = b; b = t; } }
+  else if (alive[1]){ if (dist(a, HANDS[1]) < dist(b, HANDS[1])){ t = a; a = b; b = t; } }
+  else if (a[9].x > b[9].x){ t = a; a = b; b = t; }
+  out[0] = a; out[1] = b; return out;
+}
+// the original single-hand pipeline, run once per hand (H / F are swapped to that hand)
+function processHand(h, lm, now){
+  H = h; F = h.F;
   H.pp = {x:lm[9].x, y:lm[9].y};
-  if (other){ H.lm2 = other; H.lm2t = now; }
+  const sm = SMOOTH[P.smooth], pn = PINCH_SETS[P.pinch];
   const fresh = !H.ok;
   H.ok = true; H.lastSeen = now; H.lm = lm;
   if (fresh){ F.x.reset(); F.y.reset(); F.px.reset(); F.py.reset(); }
-  const sm = SMOOTH[P.smooth], pn = PINCH_SETS[P.pinch];
 
+  // fist = all four fingertips folded closer to the wrist than their middle joints
   let curled = 0;
   for (let i = 0; i < 4; i++) if (dist2(lm[TIPS[i]], lm[0]) < dist2(lm[PIPS[i]], lm[0]) * 0.95) curled++;
   if (!H.fist && curled >= 4) H.fist = true; else if (H.fist && curled <= 2) H.fist = false;
 
+  // palm centre (the pointer while making a fist)
   H.ptx = F.px.filter(lm[9].x*2-1, now, sm[0], sm[1]);
   H.pty = F.py.filter(-(lm[9].y*2-1), now, sm[0], sm[1]);
 
+  // pointer: index fingertip (default) or the midpoint between thumb and index tips
   const rx = P.ptr === 0 ? lm[8].x*2-1 : (lm[4].x + lm[8].x) - 1;
   const ry = P.ptr === 0 ? -(lm[8].y*2-1) : -((lm[4].y + lm[8].y) - 1);
   const nx = F.x.filter(rx, now, sm[0], sm[1]), ny = F.y.filter(ry, now, sm[0], sm[1]);
@@ -1000,45 +1079,21 @@ function updateHands(now){
   else if (!pinch && ratio < pn[0]) pinch = true;
   else if (pinch && ratio > pn[1]) pinch = false;
 
-  if (pinch && !was) H.a = {nx, ny, cx:H.tx, cy:H.ty};
-  if (pinch && H.a){
+  if (pinch && !was) H.a = {nx, ny, cx:H.tx, cy:H.ty};          // remember where the cursor was when the pinch began
+  if (pinch && H.a){                                            // while pinching: only follow the hand's movement
     H.tx = H.a.cx + (nx - H.a.nx); H.ty = H.a.cy + (ny - H.a.ny);
-  } else if (ratio > HOLD_R){
+  } else if (ratio > HOLD_R){                                   // fingers apart: follow normally
     H.tx = nx; H.ty = ny;
-  }
+  }                                                             // fingers closing: hold still so small targets don't slip away
   H.pinch = pinch;
-
-  if (other && P.two){
-    const r2 = dist2(other[4], other[8]) / (dist2(other[0], other[9]) || 1e-3);
-    if (!H.p2 && r2 < pn[0]) H.p2 = true; else if (H.p2 && r2 > pn[1]) H.p2 = false;
-    if (pinch && H.p2){
-      const ax = (lm[4].x + lm[8].x)/2, ay = (lm[4].y + lm[8].y)/2, bx = (other[4].x + other[8].x)/2, by = (other[4].y + other[8].y)/2;
-      const dd = Math.hypot((ax - bx)*1.78, ay - by);
-      if (!H.zoom) H.zoom = {d0:Math.max(dd, 0.05), k:1, b:null};
-      else H.zoom.k += (dd / H.zoom.d0 - H.zoom.k) * 0.4;
-    } else H.zoom = null;
-  } else { H.p2 = false; H.zoom = null; }
 }
 
-/* ---------- hand skeleton viz ---------- */
+/* ---------- 3D hand skeleton + pinch ray (one set per hand) ---------- */
 const CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
-const handViz = new THREE.Group(); handViz.visible = false; camera.add(handViz);
 const jointMat = new THREE.PointsMaterial({color:0xe6e8ef, size:0.018, sizeAttenuation:true, fog:false});
-const tipMat = new THREE.MeshBasicMaterial({color:0xffffff, fog:false});
-const jointPts = new THREE.Points(new THREE.BufferGeometry(), jointMat);
-jointPts.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(63), 3));
-jointPts.frustumCulled = false; handViz.add(jointPts);
-const boneLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:0xcfd3de, fog:false}));
-boneLines.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CONN.length*6), 3));
-boneLines.frustumCulled = false; handViz.add(boneLines);
+const boneMat = new THREE.LineBasicMaterial({color:0xcfd3de, fog:false});
 const tipGeo = new THREE.SphereGeometry(0.016, 8, 6);
-const tipA = new THREE.Mesh(tipGeo, tipMat), tipB = new THREE.Mesh(tipGeo, tipMat);
-handViz.add(tipA); handViz.add(tipB);
-const rayMat = new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.55, depthTest:false, fog:false});
-const rayBone = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.0025, 1, 4, 1), rayMat);
-rayBone.renderOrder = 998; rayBone.visible = false; scene.add(rayBone);
-const hs = Array.from({length:21}, () => new THREE.Vector3());
-let hsInit = false;
+const rayGeo = new THREE.CylinderGeometry(0.0025, 0.0025, 1, 4, 1);
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _d = new THREE.Vector3(), UP = new THREE.Vector3(0,1,0);
 function placeBone(mesh, a, b){
   mesh.position.copy(a).add(b).multiplyScalar(0.5);
@@ -1046,71 +1101,58 @@ function placeBone(mesh, a, b){
   mesh.scale.set(1, len, 1);
   mesh.quaternion.setFromUnitVectors(UP, _d.multiplyScalar(1/len));
 }
-function updateHandViz(){
-  if (!H.ok || !H.lm){ handViz.visible = false; rayBone.visible = false; hsInit = false; return; }
-  handViz.visible = true;
-  const tH = Math.tan(THREE.MathUtils.degToRad(camera.fov/2)), asp = camera.aspect;
-  for (let i = 0; i < 21; i++){
-    const l = H.lm[i];
+function makeViz(){
+  const g = new THREE.Group(); g.visible = false; camera.add(g);
+  const pts = new THREE.Points(new THREE.BufferGeometry(), jointMat);
+  pts.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(63), 3)); pts.frustumCulled = false; g.add(pts);
+  const lines = new THREE.LineSegments(new THREE.BufferGeometry(), boneMat);
+  lines.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CONN.length*6), 3)); lines.frustumCulled = false; g.add(lines);
+  const tipMat = new THREE.MeshBasicMaterial({color:0xffffff, fog:false});
+  const tA = new THREE.Mesh(tipGeo, tipMat), tB = new THREE.Mesh(tipGeo, tipMat); g.add(tA); g.add(tB);
+  const rm = new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.55, depthTest:false, fog:false});
+  const rb = new THREE.Mesh(rayGeo, rm); rb.renderOrder = 998; rb.visible = false; scene.add(rb);
+  return {g, pts, lines, tipMat, tA, tB, rm, rb, hs:Array.from({length:21}, () => new THREE.Vector3()), init:false};
+}
+const VIZ = [makeViz(), makeViz()];
+function updateHandViz(i){
+  const v = VIZ[i], h = HANDS[i], cur = CURS[i];
+  if (!h.ok || !h.lm){ v.g.visible = false; v.rb.visible = false; v.init = false; return; }
+  v.g.visible = true;
+  const hs = v.hs, tH = Math.tan(THREE.MathUtils.degToRad(camera.fov/2)), asp = camera.aspect;
+  for (let k = 0; k < 21; k++){
+    const l = h.lm[k];
     const depth = Math.min(2, Math.max(0.5, HAND_D + l.z*2.5));
     const tx = (l.x*2-1) * tH * asp * depth, ty = -(l.y*2-1) * tH * depth, tz = -depth;
-    if (!hsInit) hs[i].set(tx, ty, tz);
-    else { hs[i].x += (tx - hs[i].x)*0.5; hs[i].y += (ty - hs[i].y)*0.5; hs[i].z += (tz - hs[i].z)*0.5; }
+    if (!v.init) hs[k].set(tx, ty, tz);
+    else { hs[k].x += (tx - hs[k].x)*0.5; hs[k].y += (ty - hs[k].y)*0.5; hs[k].z += (tz - hs[k].z)*0.5; }
   }
-  hsInit = true;
-  const jp = jointPts.geometry.attributes.position.array, bp = boneLines.geometry.attributes.position.array;
-  for (let i = 0; i < 21; i++){ jp[i*3] = hs[i].x; jp[i*3+1] = hs[i].y; jp[i*3+2] = hs[i].z; }
-  CONN.forEach((c, i) => { const p = hs[c[0]], q = hs[c[1]]; bp.set([p.x,p.y,p.z,q.x,q.y,q.z], i*6); });
-  jointPts.geometry.attributes.position.needsUpdate = true; boneLines.geometry.attributes.position.needsUpdate = true;
-  tipA.position.copy(hs[4]); tipB.position.copy(hs[8]);
-  tipMat.color.set(H.pinch ? 0x39e08a : (H.fist ? 0x4f8cff : 0xffffff));
-  if (H.fist) _a.copy(hs[9]); else _a.copy(hs[4]).add(hs[8]).multiplyScalar(0.5);
-  handViz.localToWorld(_a);
-  _b.copy(cursor.position);
-  placeBone(rayBone, _a, _b);
-  rayMat.color.set(H.pinch ? 0x39e08a : (H.fist ? 0x4f8cff : 0xffffff));
-  rayBone.visible = true;
+  v.init = true;
+  const jp = v.pts.geometry.attributes.position.array, bp = v.lines.geometry.attributes.position.array;
+  for (let k = 0; k < 21; k++){ jp[k*3] = hs[k].x; jp[k*3+1] = hs[k].y; jp[k*3+2] = hs[k].z; }
+  CONN.forEach((c, k) => { const p = hs[c[0]], q = hs[c[1]]; bp.set([p.x,p.y,p.z,q.x,q.y,q.z], k*6); });
+  v.pts.geometry.attributes.position.needsUpdate = true; v.lines.geometry.attributes.position.needsUpdate = true;
+  v.tA.position.copy(hs[4]); v.tB.position.copy(hs[8]);
+  const col = h.pinch ? 0x39e08a : (h.fist ? 0x4f8cff : 0xffffff);
+  v.tipMat.color.set(col); v.rm.color.set(col);
+  if (h.fist) _a.copy(hs[9]); else _a.copy(hs[4]).add(hs[8]).multiplyScalar(0.5);
+  v.g.localToWorld(_a);
+  _b.copy(cur.position);
+  placeBone(v.rb, _a, _b);
+  v.rb.visible = cur.visible;
 }
 
-const handViz2 = new THREE.Group(); handViz2.visible = false; camera.add(handViz2);
-const jointPts2 = new THREE.Points(new THREE.BufferGeometry(), jointMat);
-jointPts2.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(63), 3));
-jointPts2.frustumCulled = false; handViz2.add(jointPts2);
-const boneLines2 = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({color:0xcfd3de, fog:false}));
-boneLines2.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(CONN.length*6), 3));
-boneLines2.frustumCulled = false; handViz2.add(boneLines2);
-const tipMat2 = new THREE.MeshBasicMaterial({color:0xffffff, fog:false});
-const tipA2 = new THREE.Mesh(tipGeo, tipMat2), tipB2 = new THREE.Mesh(tipGeo, tipMat2);
-handViz2.add(tipA2); handViz2.add(tipB2);
-const hs2 = Array.from({length:21}, () => new THREE.Vector3());
-let hs2Init = false;
-function updateHand2Viz(){
-  const on = P.two && H.ok && H.lm2 && (performance.now() - H.lm2t < LOST_MS);
-  if (!on){ handViz2.visible = false; hs2Init = false; return; }
-  handViz2.visible = true;
-  const tH = Math.tan(THREE.MathUtils.degToRad(camera.fov/2)), asp = camera.aspect;
-  for (let i = 0; i < 21; i++){
-    const l = H.lm2[i];
-    const depth = Math.min(2, Math.max(0.5, HAND_D + l.z*2.5));
-    const tx = (l.x*2-1) * tH * asp * depth, ty = -(l.y*2-1) * tH * depth, tz = -depth;
-    if (!hs2Init) hs2[i].set(tx, ty, tz);
-    else { hs2[i].x += (tx - hs2[i].x)*0.5; hs2[i].y += (ty - hs2[i].y)*0.5; hs2[i].z += (tz - hs2[i].z)*0.5; }
-  }
-  hs2Init = true;
-  const jp = jointPts2.geometry.attributes.position.array, bp = boneLines2.geometry.attributes.position.array;
-  for (let i = 0; i < 21; i++){ jp[i*3] = hs2[i].x; jp[i*3+1] = hs2[i].y; jp[i*3+2] = hs2[i].z; }
-  CONN.forEach((c, i) => { const p = hs2[c[0]], q = hs2[c[1]]; bp.set([p.x,p.y,p.z,q.x,q.y,q.z], i*6); });
-  jointPts2.geometry.attributes.position.needsUpdate = true; boneLines2.geometry.attributes.position.needsUpdate = true;
-  tipA2.position.copy(hs2[4]); tipB2.position.copy(hs2[8]);
-  tipMat2.color.set(H.p2 ? 0x39e08a : 0xffffff);
-}
-
-/* ---------- interaction ---------- */
+/* ---------- interaction: hand / gaze dwell / tap ---------- */
 const ray = new THREE.Raycaster();
-const cursor = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 10),
+let cursor = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 10),
   new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, depthTest:false, depthWrite:false, fog:false}));
 cursor.renderOrder = 999; scene.add(cursor);
+const cursor2 = new THREE.Mesh(new THREE.SphereGeometry(0.035, 12, 10),
+  new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, depthTest:false, depthWrite:false, fog:false}));
+cursor2.renderOrder = 999; cursor2.visible = false; scene.add(cursor2);
+const CURS = [cursor, cursor2];
 let hoverKey = null, hoverT = 0, wasPinch = false, wasFist = false, cool = 0, tap = null, grab = null, sw = null, hovUI = null;
+const CTX = [0, 1].map(() => ({grab:null, sw:null, wasPinch:false, wasFist:false, hoverKey:null, hoverT:0, cool:0}));   // per-hand interaction state
+const hoverReqs = [], hovObjs = [];
 renderer.domElement.addEventListener('pointerdown', e => {
   if (N.swallow){ N.swallow = false; return; }
   tap = {x:e.clientX/innerWidth*2-1, y:-(e.clientY/innerHeight)*2+1};
@@ -1139,47 +1181,29 @@ function activeList(){
   else if (S.mode === 'gallery') l.push(...galleryItems);
   return l;
 }
-function interact(now, dt){
+function interactOne(now, dt, hi){
   const gazeOn = P.gaze === 1 || (P.gaze === 2 && S.stereo);
   let p = null, click = false, dwell = false, pinchDown = false, fistDown = false;
-  if (tap){ p = S.stereo ? {x:0, y:0} : tap; click = true; tap = null; }
+  if (hi === 0 && tap){ p = S.stereo ? {x:0, y:0} : tap; click = true; tap = null; }
   else if (H.ok){ p = H.fist ? {x:H.px, y:H.py} : H; pinchDown = H.pinch && !wasPinch; fistDown = H.fist && !wasFist; click = pinchDown; }
-  else if (gazeOn){ p = {x:0, y:0}; dwell = true; }
+  else if (gazeOn && hi === 0 && !HANDS[1].ok){ p = {x:0, y:0}; dwell = true; }
   const pinching = H.ok && H.pinch, fisting = H.ok && H.fist;
   wasPinch = pinching; wasFist = fisting;
 
-  if (H.ok && H.zoom){
-    const z = H.zoom;
-    if (z.b === null){
-      z.t = hovUI || (S.mode === 'v360' ? 'fov' : (panel.mesh.visible ? panel : null));
-      z.b = z.t === 'fov' ? v360.fov : z.t === panel ? S.pscale : (z.t ? z.t.mesh.scale.x : 1);
-    }
-    if (z.t === 'fov') v360.fov = clamp(z.b / z.k, 25, 100);
-    else if (z.t === panel) S.pscale = clamp(z.b * z.k, PS_MIN, PS_MAX);
-    else if (z.t){
-      const ns = clamp(z.b * z.k, z.t === dock ? 0.6 : 0.5, z.t === dock ? 2.2 : 2.5);
-      z.t.mesh.scale.setScalar(ns); if (z.t.win) z.t.win.s = ns;
-    }
-    sw = null; grab = null; cursor.visible = false; hoverKey = null;
-    return;
-  }
-
-  if (!p){
+  if (!p){                      // nothing is pointing (no hand, centre cursor off): hide the cursor and clear hover
     grab = null; sw = null; cursor.visible = false; hoverKey = null; hoverT = 0;
-    allUIs().forEach(u => { if (u.hover || u.press){ u.hover = null; u.press = null; u.dirty = true; } });
-    activeList().forEach(o => { if (!o.userData.ui){ o.scale.x += (1 - o.scale.x)*0.3; o.scale.y = o.scale.z = o.scale.x; } });
     return;
   }
   cursor.visible = true;
   ray.setFromCamera(p, camera);
 
+  // --- dragging the panel / dock, or resizing the panel ---
   if (grab){
     const alive = grab.kind === 'fist' ? fisting : pinching;
     const gw = typeof grab.target === 'object';
     const gu = gw ? grab.target.ui : (grab.target === 'dock' ? dock : panel);
     if (!alive){
       grab = null;
-      allUIs().forEach(u => { u.hover = null; u.press = null; u.dirty = true; });
     } else {
       const r = rayYawY(grab.R);
       if (gw){
@@ -1203,7 +1227,7 @@ function interact(now, dt){
         dock.mesh.position.y = clamp(grab.y0 + (r.y - grab.rayY), -1.1, 0.5);
       }
       const hid = grab.type === 'resize' ? 'resize' : (grab.target === 'dock' ? 'dockbg' : 'grab');
-      if (gu.hover !== hid){ gu.hover = hid; gu.press = hid; gu.dirty = true; }
+      hoverReqs.push({ui:gu, h:hid, pr:hid});
       ray.ray.at(grab.R, cursor.position);
       cursor.material.color.set(0x39e08a); cursor.scale.setScalar(1);
       return;
@@ -1213,11 +1237,11 @@ function interact(now, dt){
   if (sw){
     if (!pinching){
       const q = sw; sw = null;
-      if (q.kind === 'press' && !q.cancel && q.reg && q.reg.fn && now > cool){ cool = now + 350; q.reg.fn(); }
+      if (q.kind === 'press' && !q.cancel && q.reg && q.reg.fn && now > cool){ cool = now + 350; q.reg.fn(); }   // select on release
     } else if (sw.kind === 'press'){
       const dx = p.x - sw.x0, dy = p.y - sw.y0;
       if (sw.ui === panel && !sw.paged && Math.abs(dx) > 0.22 && Math.abs(dx) > Math.abs(dy)*1.3){
-        sw.paged = true; sw.cancel = true; S.page += dx < 0 ? 1 : -1; panel.dirty = true;
+        sw.paged = true; sw.cancel = true; S.page += dx < 0 ? 1 : -1; panel.dirty = true;                       // swipe = flip page
       } else if (Math.hypot(dx, dy) > 0.3) sw.cancel = true;
     } else if (sw.kind === 'look'){
       const k = THREE.MathUtils.degToRad(camera.fov) / 2 * 1.5;
@@ -1230,20 +1254,11 @@ function interact(now, dt){
   const obj = hit ? hit.object : null;
   const ui = obj && obj.userData.ui ? obj.userData.ui : null;
   const reg = ui ? ui.at(hit.uv) : null;
-  hovUI = ui;
 
-  allUIs().forEach(u => {
-    const h = (u === ui && reg) ? reg.id : null;
-    const pr = (h && pinching) ? h : null;
-    if (u.hover !== h || u.press !== pr){ u.hover = h; u.press = pr; u.dirty = true; }
-  });
+  if (ui && reg) hoverReqs.push({ui, h:reg.id, pr:pinching ? reg.id : null});
+  if (obj && !ui) hovObjs.push(obj);
 
-  list.forEach(o => {
-    if (o.userData.ui) return;
-    const s = (o === obj) ? 1.12 : 1;
-    o.scale.x += (s - o.scale.x)*0.3; o.scale.y = o.scale.z = o.scale.x;
-  });
-
+  // a fist closed anywhere over the panel or dock grabs it
   if (fistDown && ui) startGrab('fist', ui === dock ? 'dock' : (ui.win || 'panel'), 'move');
 
   const fn = ui ? (reg && reg.fn) : (obj && obj.userData.onClick);
@@ -1260,7 +1275,7 @@ function interact(now, dt){
     else if (pinchDown && ui === dock && reg && reg.id === 'dockbg') startGrab('pinch', 'dock', 'move');
     else if (pinchDown && ui && ui.win && reg && (reg.id === 'grab' || reg.id === 'resize')) startGrab('pinch', ui.win, reg.id === 'grab' ? 'move' : 'resize');
     else if (fn){
-      if (pinchDown && ui) sw = {kind:'press', ui, reg, x0:p.x, y0:p.y, cancel:false};
+      if (pinchDown && ui) sw = {kind:'press', ui, reg, x0:p.x, y0:p.y, cancel:false};       // pinch: decide on release (tap vs swipe)
       else { cool = now + 350; fn(); }
     }
   }
@@ -1275,50 +1290,88 @@ function interact(now, dt){
   cursor.scale.setScalar(1 + hoverT*2);
 }
 
-/* ---------- loop & stereo rendering ---------- */
+const NEWCTX = () => ({grab:null, sw:null, wasPinch:false, wasFist:false, hoverKey:null, hoverT:0, cool:0});
+function applyHover(){
+  hovUI = null;
+  allUIs().forEach(u => {
+    let h = null, pr = null;
+    for (const q of hoverReqs){ if (q.ui !== u) continue; if (h === null || (q.pr && !pr)){ h = q.h; pr = q.pr; } }
+    if (h && !hovUI) hovUI = u;
+    if (u.hover !== h || u.press !== pr){ u.hover = h; u.press = pr; u.dirty = true; }
+  });
+  activeList().forEach(o => {
+    if (o.userData.ui) return;
+    const sc = hovObjs.includes(o) ? 1.12 : 1;
+    o.scale.x += (sc - o.scale.x)*0.3; o.scale.y = o.scale.z = o.scale.x;
+  });
+}
+function interact(now, dt){
+  hoverReqs.length = 0; hovObjs.length = 0;
+  if (ZM){                                  // two-hand zoom: whatever the cursor was over (window / dock / panel), else the panel or the 360 view
+    const z = ZM;
+    if (z.b === null){
+      z.t = hovUI || (S.mode === 'v360' ? 'fov' : (panel.mesh.visible ? panel : null));
+      z.b = z.t === 'fov' ? v360.fov : z.t === panel ? S.pscale : (z.t ? z.t.mesh.scale.x : 1);
+    }
+    if (z.t === 'fov') v360.fov = clamp(z.b / z.k, 25, 100);
+    else if (z.t === panel) S.pscale = clamp(z.b * z.k, PS_MIN, PS_MAX);
+    else if (z.t){
+      const ns = clamp(z.b * z.k, z.t === dock ? 0.6 : 0.5, z.t === dock ? 2.2 : 2.5);
+      z.t.mesh.scale.setScalar(ns); if (z.t.win) z.t.win.s = ns;
+    }
+    for (let i = 0; i < 2; i++){ CTX[i] = NEWCTX(); CURS[i].visible = false; CTX[i].wasPinch = true; }
+    applyHover();
+    return;
+  }
+  for (let i = 0; i < 2; i++){
+    H = HANDS[i]; F = H.F; cursor = CURS[i];
+    ({grab, sw, wasPinch, wasFist, hoverKey, hoverT, cool} = CTX[i]);
+    if (i === 1 && !H.ok){ cursor.visible = false; CTX[1] = NEWCTX(); continue; }
+    interactOne(now, dt, i);
+    CTX[i] = {grab, sw, wasPinch, wasFist, hoverKey, hoverT, cool};
+  }
+  H = HANDS[0]; F = H.F; cursor = CURS[0];
+  applyHover();
+}
+
+/* ---------- loop ---------- */
 function resize(){
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = (S.stereo ? (w/2) : w) / h;
+  camera.aspect = (S.stereo ? w/2 : w) / h;
   camera.updateProjectionMatrix();
   hud.style.display = S.stereo ? 'none' : 'block';
-  vrDivider.style.display = S.stereo ? 'block' : 'none';
 }
-
+// crop the camera picture to the viewport shape instead of stretching it
+function fitBackground(aspect){
+  const tex = scene.background;
+  if (!tex || !tex.isTexture) return;
+  const el = tex === boostTex ? boostCv : video;
+  const va = (el.videoWidth || el.width || 16) / (el.videoHeight || el.height || 9);
+  let rx = 1, ry = 1;
+  if (aspect < va) rx = aspect / va; else ry = va / aspect;
+  tex.repeat.set(rx, ry); tex.offset.set((1 - rx)/2, (1 - ry)/2);
+}
 function render(){
   const w = innerWidth, h = innerHeight;
+  fitBackground(camera.aspect);
   if (S.stereo){
-    camera.updateMatrixWorld();
-    
-    // ตั้งค่า Stereo convergence (ระยะโฟกัสที่รวมสายตา)
-    stereo.eyeSep = S.ipd;
-    stereo.focus = PANEL_R; // ป้องกันภาพซ้อน: จุดโฟกัสตัดกันที่ระยะแผง UI (~2m) พอดี
-    stereo.update(camera);
-    
+    camera.updateMatrixWorld(); stereo.eyeSep = S.ipd; stereo.update(camera);
+    // each eye's picture is moved toward the middle so its centre sits in front of the lens (phone screen halves are wider apart than your eyes)
+    const d = Math.round(S.sep * w/2);
     renderer.setScissorTest(true);
-    
-    // Left Eye
-    renderer.setViewport(0, 0, Math.floor(w/2), h);
-    renderer.setScissor(0, 0, Math.floor(w/2), h);
-    renderer.render(scene, stereo.cameraL);
-    
-    // Right Eye
-    renderer.setViewport(Math.floor(w/2), 0, Math.ceil(w/2), h);
-    renderer.setScissor(Math.floor(w/2), 0, Math.ceil(w/2), h);
-    renderer.render(scene, stereo.cameraR);
-    
+    renderer.setViewport(d, 0, w/2, h); renderer.setScissor(0, 0, w/2, h); renderer.render(scene, stereo.cameraL);
+    renderer.setViewport(w/2 - d, 0, w/2, h); renderer.setScissor(w/2, 0, w/2, h); renderer.render(scene, stereo.cameraR);
     renderer.setScissorTest(false);
   } else {
-    renderer.setViewport(0, 0, w, h);
-    renderer.render(scene, camera);
+    renderer.setViewport(0, 0, w, h); renderer.render(scene, camera);
   }
 }
-
 let last = 0, fpsN = 0, fpsT = 0, lowT = 0;
 function frame(now){
   requestAnimationFrame(frame);
   const dt = Math.min((now - last)/1000, 0.1); last = now;
-  if (N.webOpen && !N.webFloat) return;
+  if (N.webOpen && !N.webFloat) return;                 // the browser overlay covers the scene: pause the 3D work
   camera.quaternion.copy(devQ); camera.updateMatrixWorld(true);
   updateLight(now);
   if (N.boosting && S.mr && video.currentTime !== N.drawnVT) boostFrame();
@@ -1326,8 +1379,7 @@ function frame(now){
   easeCursor(dt);
   interact(now, dt);
   syncPanelGeo();
-  updateHandViz();
-  updateHand2Viz();
+  updateHandViz(0); updateHandViz(1);
   if (toast.mesh.visible){
     if (now > N.msgUntil) toast.mesh.visible = false;
     else toast.mesh.position.set(0, dock.mesh.position.y + 0.24, -DOCK_R + 0.02);
@@ -1353,7 +1405,7 @@ function frame(now){
 
   fpsN++; fpsT += dt;
   if (fpsT > 0.5){
-    hud.textContent = VERSION + ' | ' + Math.round(fpsN/fpsT) + ' fps | hand: ' + (H.ok ? (H.fist ? 'fist' : (H.pinch ? 'pinch' : 'ok')) : 'none') + ' (' + delegate + ', det ' + D.ms.toFixed(0) + 'ms/' + (detGap ? Math.round(1000/Math.max(detGap,1)) : 0) + 'Hz)\nmode: ' + S.mode + ' | q: ' + QNAMES[S.qi] + ' | ui x' + S.pscale.toFixed(2) + '\nlight ' + Math.round(N.lum) + ' x' + N.gain.toFixed(1) + (N.torchOn ? ' | torch' : '') + (gotOrient ? '' : ' | no gyro') + (H.zoom ? ' | 2 มือ' : '') + '\nสองมือ: ' + (P.two ? 'เปิด' : 'ปิด') + ' | เจอมือ ' + (H.ok ? (H.n || 0) : 0) + (delegate === '-' ? '\nกำลังโหลดโมเดลมือ…' : '') + (delegate === 'fail' ? '\nโหลดโมเดลมือไม่ได้: ' + initErr.slice(0, 90) : '');
+    hud.textContent = VERSION + (NATIVE.ok ? '-apk' : '') + ' | ' + Math.round(fpsN/fpsT) + ' fps | hand: ' + (H.ok ? (H.fist ? 'fist' : (H.pinch ? 'pinch' : 'ok')) : 'none') + ' (' + delegate + ', det ' + D.ms.toFixed(0) + 'ms/' + (detGap ? Math.round(1000/Math.max(detGap,1)) : 0) + 'Hz)\nmode: ' + S.mode + ' | q: ' + QNAMES[S.qi] + ' | ui x' + S.pscale.toFixed(2) + '\nlight ' + Math.round(N.lum) + ' x' + N.gain.toFixed(1) + (N.torchOn ? ' | torch' : '') + (gotOrient ? '' : ' | no gyro') + (ZM ? ' | ซูม' : '') + (HANDS[1].ok ? ' | 2 มือ' : '') + '\nสองมือ: ' + (P.two ? 'เปิด' : 'ปิด') + ' | เจอมือ ' + (H.ok ? (H.n || 0) : 0) + (delegate === '-' ? '\nกำลังโหลดโมเดลมือ…' : '') + (delegate === 'fail' ? '\nโหลดโมเดลมือไม่ได้: ' + initErr.slice(0, 90) : '');
     const fpsNow = fpsN/fpsT;
     if (fpsNow < 20 && S.qi > 0 && S.cam !== undefined){ lowT += 0.5; if (lowT >= 2.5){ S.qi--; applyQuality(); savePrefs(); invalidateUI(); lowT = 0; } } else lowT = 0;
     fpsN = 0; fpsT = 0;
@@ -1379,6 +1431,7 @@ document.addEventListener('click', () => {
   const fn = N.pendingFn; N.pendingFn = null; N.swallow = false; fn();
 }, true);
 
+// a real touch right after a hand-triggered launch lets Chrome follow the Android link
 document.addEventListener('pointerdown', () => {
   if (!N.pending) return;
   const u = N.pending; N.pending = null; N.swallow = true;
@@ -1386,12 +1439,12 @@ document.addEventListener('pointerdown', () => {
   window.location.href = u;
 }, true);
 
+// coming back from another app: restart the camera and screen lock
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible' || !S.cam) return;
   try{ if (N.track && N.track.readyState === 'ended') await initCamera(); else await video.play(); }catch(e){}
   try{ if (navigator.wakeLock) await navigator.wakeLock.request('screen'); }catch(e){}
 });
-
 $('go').onclick = async () => {
   $('msg').textContent = 'กำลังเริ่ม...';
   try{ if (DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); }catch(e){}
@@ -1400,6 +1453,7 @@ $('go').onclick = async () => {
   try{ if (navigator.wakeLock) await navigator.wakeLock.request('screen'); }catch(e){}
   await initCamera();
   initHands();
+  nativeInit();
   $('start').remove();
   groups.shoot.visible = false; groups.gallery.visible = false; panel.mesh.visible = true;
   applyQuality(); recenterHeading(); drawScore(); invalidateUI();
